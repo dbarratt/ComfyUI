@@ -16,6 +16,7 @@ import numpy as np
 from einops import repeat, rearrange
 
 from comfy.ldm.util import instantiate_from_config
+from comfy import model_management
 
 class AlphaBlender(nn.Module):
     strategies = ["learned", "fixed", "learned_with_images"]
@@ -197,9 +198,30 @@ class CheckpointFunction(torch.autograd.Function):
         ctx.run_function = run_function
         ctx.input_tensors = list(args[:length])
         ctx.input_params = list(args[length:])
-        ctx.gpu_autocast_kwargs = {"enabled": torch.is_autocast_enabled(),
-                                   "dtype": torch.get_autocast_gpu_dtype(),
-                                   "cache_enabled": torch.is_autocast_cache_enabled()}
+        # Get device type from input tensor to determine autocast settings
+        device = ctx.input_tensors[0].device if len(ctx.input_tensors) > 0 else None
+        device_type = model_management.get_autocast_device(device) if device is not None else "cpu"
+        
+        # Get autocast dtype and settings - only preserve CUDA autocast state if CUDA is actually available
+        try:
+            if device_type == 'cuda' and torch.cuda.is_available():
+                autocast_dtype = torch.get_autocast_gpu_dtype()
+                autocast_enabled = torch.is_autocast_enabled()
+                autocast_cache_enabled = torch.is_autocast_cache_enabled()
+            else:
+                # For non-CUDA devices, don't preserve CUDA autocast state
+                # Let autocast use default dtype based on device_type
+                autocast_dtype = None  # Let autocast choose based on device_type
+                autocast_enabled = False  # Don't enable autocast by default for non-CUDA
+                autocast_cache_enabled = False
+        except:
+            autocast_dtype = None
+            autocast_enabled = False
+            autocast_cache_enabled = False
+        ctx.gpu_autocast_kwargs = {"enabled": autocast_enabled,
+                                   "dtype": autocast_dtype,
+                                   "cache_enabled": autocast_cache_enabled,
+                                   "device_type": device_type}
         with torch.no_grad():
             output_tensors = ctx.run_function(*ctx.input_tensors)
         return output_tensors
@@ -207,8 +229,18 @@ class CheckpointFunction(torch.autograd.Function):
     @staticmethod
     def backward(ctx, *output_grads):
         ctx.input_tensors = [x.detach().requires_grad_(True) for x in ctx.input_tensors]
+        # Use the device_type that was already set in forward pass
+        autocast_kwargs = ctx.gpu_autocast_kwargs.copy()
+        # Ensure device_type is set and valid (it should already be from forward)
+        if "device_type" not in autocast_kwargs:
+            device_type = model_management.get_autocast_device(ctx.input_tensors[0].device) if len(ctx.input_tensors) > 0 else "cpu"
+            autocast_kwargs["device_type"] = device_type
+        # Final safety check: never use 'cuda' if CUDA is not available
+        if autocast_kwargs.get("device_type") == 'cuda' and not torch.cuda.is_available():
+            device_type = model_management.get_autocast_device(ctx.input_tensors[0].device) if len(ctx.input_tensors) > 0 else "cpu"
+            autocast_kwargs["device_type"] = device_type
         with torch.enable_grad(), \
-                torch.cuda.amp.autocast(**ctx.gpu_autocast_kwargs):
+                torch.autocast(**autocast_kwargs):
             # Fixes a bug where the first op in run_function modifies the
             # Tensor storage in place, which is not allowed for detach()'d
             # Tensors.

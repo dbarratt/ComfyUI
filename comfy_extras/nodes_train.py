@@ -208,7 +208,8 @@ class TrainSampler(comfy.samplers.Sampler):
             extra_args, indicies, full_size=dataset_size
         )
 
-        with torch.autocast(xt.device.type, dtype=self.training_dtype):
+        device_type = comfy.model_management.get_autocast_device(xt.device)
+        with torch.autocast(device_type=device_type, dtype=self.training_dtype):
             x0_pred = model_wrap(
                 xt.requires_grad_(True),
                 batch_sigmas.requires_grad_(True),

@@ -1306,8 +1306,30 @@ def vae_dtype(device=None, allowed_dtypes=[]):
 
 def get_autocast_device(dev):
     if hasattr(dev, 'type'):
-        return dev.type
-    return "cuda"
+        device_type = dev.type
+        # Only use 'cuda' if CUDA is actually available
+        if device_type == 'cuda' and not torch.cuda.is_available():
+            # CUDA not available, check what's actually available
+            if is_intel_xpu():
+                return "xpu"
+            elif is_ascend_npu():
+                return "npu"
+            elif is_mlu():
+                return "mlu"
+            else:
+                return "cpu"
+        return device_type
+    # If device doesn't have type attribute, check what's available
+    if torch.cuda.is_available():
+        return "cuda"
+    elif is_intel_xpu():
+        return "xpu"
+    elif is_ascend_npu():
+        return "npu"
+    elif is_mlu():
+        return "mlu"
+    else:
+        return "cpu"
 
 def supports_dtype(device, dtype): #TODO
     if dtype == torch.float32:

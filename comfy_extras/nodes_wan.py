@@ -1448,6 +1448,8 @@ class Wan22ImageToVideoLatent(io.ComfyNode):
         if start_image is not None:
             start_image = comfy.utils.common_upscale(start_image[:length].movedim(-1, 1), width, height, "bilinear", "center").movedim(1, -1)
             latent_temp = vae.encode(start_image)
+            # Ensure the encoded latent is on the correct device and detached to avoid state issues with GGUF models
+            latent_temp = latent_temp.to(comfy.model_management.intermediate_device()).contiguous()
             latent[:, :, :latent_temp.shape[-3]] = latent_temp
             mask[:, :, :latent_temp.shape[-3]] *= 0.0
 
